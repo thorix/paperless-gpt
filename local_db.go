@@ -33,6 +33,15 @@ type OCRPageResult struct {
 	UpdatedAt      time.Time
 }
 
+// OCRFailureCount tracks per-document OCR failure counts
+type OCRFailureCount struct {
+	ID         uint `gorm:"primaryKey"`
+	DocumentID int  `gorm:"uniqueIndex;not null"`
+	Failures   int  `gorm:"not null;default:0"`
+	LastError  string
+	UpdatedAt  time.Time
+}
+
 // InitializeDB initializes the SQLite database and migrates the schema
 func InitializeDB() *gorm.DB {
 	// Ensure db directory exists
@@ -50,7 +59,7 @@ func InitializeDB() *gorm.DB {
 	}
 
 	// Migrate the schema (create the tables if they don't exist)
-	err = db.AutoMigrate(&ModificationHistory{}, &OCRPageResult{})
+	err = db.AutoMigrate(&ModificationHistory{}, &OCRPageResult{}, &OCRFailureCount{})
 	if err != nil {
 		log.Fatalf("Failed to migrate database schema: %v", err)
 	}
@@ -152,4 +161,30 @@ func UpdateOcrPageResult(db *gorm.DB, docID int, pageIdx int, text string, ocrLi
 
 func DeleteOcrPageResults(db *gorm.DB, docID int) error {
 	return db.Where("document_id = ?", docID).Delete(&OCRPageResult{}).Error
+}
+
+// IncrementOCRFailureCount increments the failure count for a document and returns the new count.
+func IncrementOCRFailureCount(db *gorm.DB, docID int, lastErr string) (int, error) {
+	var record OCRFailureCount
+	tx := db.Where("document_id = ?", docID).First(&record)
+	if errors.Is(tx.Error, gorm.ErrRecordNotFound) {
+		record = OCRFailureCount{DocumentID: docID, Failures: 1, LastError: lastErr}
+		if err := db.Create(&record).Error; err != nil {
+			return 0, err
+		}
+		return 1, nil
+	} else if tx.Error != nil {
+		return 0, tx.Error
+	}
+	record.Failures++
+	record.LastError = lastErr
+	if err := db.Save(&record).Error; err != nil {
+		return 0, err
+	}
+	return record.Failures, nil
+}
+
+// ResetOCRFailureCount removes the failure record for a document (called on success).
+func ResetOCRFailureCount(db *gorm.DB, docID int) {
+	db.Where("document_id = ?", docID).Delete(&OCRFailureCount{})
 }

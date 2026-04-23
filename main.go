@@ -84,6 +84,8 @@ var (
 	doclingOCRPipeline            = os.Getenv("DOCLING_OCR_PIPELINE")
 	doclingOCREngine              = os.Getenv("DOCLING_OCR_ENGINE")
 	googleThinkingBudget          *int32 // Will be parsed from GOOGLEAI_THINKING_BUDGET
+	ocrMaxRetries                 = 3    // Will be read from OCR_MAX_RETRIES
+	ocrFailedTag                  = os.Getenv("OCR_FAILED_TAG")
 
 	// Templates
 	titleTemplate         *template.Template
@@ -350,6 +352,16 @@ func main() {
 				log.Fatalf("Invalid OCR_LIMIT_PAGES value: %v", err)
 			}
 		}
+	}
+
+	// Parse OCR_MAX_RETRIES
+	if v := os.Getenv("OCR_MAX_RETRIES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			ocrMaxRetries = parsed
+		}
+	}
+	if ocrFailedTag == "" {
+		ocrFailedTag = "ocr-failed"
 	}
 
 	// Start Background-Tasks for Auto-Tagging and Auto-OCR (if enabled)
@@ -992,6 +1004,7 @@ func createLLM() (llms.Model, error) {
 				log.Warnf("Invalid OLLAMA_CONTEXT_LENGTH value: %v, ignoring", err)
 			}
 		}
+		opts = append(opts, ollama.WithHTTPClient(ollamaHTTPClient()))
 		llm, err := ollama.New(opts...)
 		if err != nil {
 			return nil, err
@@ -1100,6 +1113,7 @@ func createVisionLLM() (llms.Model, error) {
 				log.Warnf("Invalid OLLAMA_CONTEXT_LENGTH value: %v, ignoring", err)
 			}
 		}
+		opts = append(opts, ollama.WithHTTPClient(ollamaHTTPClient()))
 		llm, err := ollama.New(opts...)
 		if err != nil {
 			return nil, err
@@ -1164,4 +1178,19 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Add(key, value)
 	}
 	return t.transport.RoundTrip(req)
+}
+
+// ollamaHTTPClient returns an HTTP client with a configurable timeout for Ollama
+// requests. Default is 5 minutes. Set OLLAMA_TIMEOUT to override (e.g. "10m").
+func ollamaHTTPClient() *http.Client {
+	timeout := 5 * time.Minute
+	if t := os.Getenv("OLLAMA_TIMEOUT"); t != "" {
+		if d, err := time.ParseDuration(t); err == nil {
+			timeout = d
+		} else {
+			log.Warnf("Invalid OLLAMA_TIMEOUT value %q, using default %v", t, timeout)
+		}
+	}
+	log.Infof("Ollama HTTP client timeout: %v", timeout)
+	return &http.Client{Timeout: timeout}
 }
